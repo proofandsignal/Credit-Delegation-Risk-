@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.2.0",
+  "contract_version": "0.2.1",
   "registered_at": "2026-10-09",
   "experiment": "FORWARD_50",
   "target_size": 50,
@@ -7,8 +7,19 @@
     "chain_id": 1,
     "chain": "ethereum",
     "protocol": "aave-v3",
+    "market_pool": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
     "unit_of_analysis": "public on-chain borrowing position",
     "identity_inference": false
+  },
+  "discovery": {
+    "source_event": "Borrow(address,address,address,uint256,uint8,uint256,uint16)",
+    "debt_holder_field": "onBehalfOf",
+    "lookback_days": 365,
+    "minimum_protocol_history_days": 90,
+    "snapshot_rule": "latest_block_at_run_start_or_explicit_fixed_block",
+    "ranking": "sha256(seed|lowercase_wallet|snapshot_block)",
+    "seed": "forward50-v0.2-pre-registered-2026-10-09",
+    "outcome_blind": true
   },
   "eligibility": {
     "minimum_wallet_history_days": 90,
