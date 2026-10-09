@@ -3,9 +3,12 @@ from datetime import datetime, timezone
 import pytest
 
 from credit_delegation_risk.forward import (
+    MODEL_PROBABILITY_SEMANTICS,
     OutcomeLedger,
     OutcomeObservation,
+    PositionOutcomeMetrics,
     calibration_summary,
+    classify_position_outcome,
     freeze_decision,
 )
 from credit_delegation_risk.models import BorrowerSnapshot
@@ -29,12 +32,12 @@ def _borrower() -> BorrowerSnapshot:
 
 def test_frozen_decision_is_deterministic_for_same_t0_input():
     observed_at = datetime(2026, 10, 9, 6, 0, tzinfo=timezone.utc)
-
     first = freeze_decision(_borrower(), observed_at)
     second = freeze_decision(_borrower(), observed_at)
 
     assert first == second
     assert first.input_fingerprint == second.input_fingerprint
+    assert first.model_probability_semantics == MODEL_PROBABILITY_SEMANTICS
     assert len(first.decision_id) == 24
 
 
@@ -51,16 +54,13 @@ def test_snapshot_change_changes_fingerprint():
 
 
 def test_outcome_ledger_rejects_overwrite():
-    decision = freeze_decision(
-        _borrower(),
-        datetime(2026, 10, 9, 6, 0, tzinfo=timezone.utc),
-    )
+    decision = freeze_decision(_borrower(), datetime(2026, 10, 9, 6, 0, tzinfo=timezone.utc))
     observation = OutcomeObservation(
         decision_id=decision.decision_id,
         horizon_days=30,
         observed_at="2026-11-08T06:00:00+00:00",
-        adverse_outcome=False,
-        outcome_reason="no adverse event observed",
+        adverse_event=False,
+        outcome_reason="no primary adverse event observed",
         evidence_ref="evidence://forward-001/30d",
     )
 
@@ -76,32 +76,53 @@ def test_outcome_requires_valid_horizon():
         decision_id="abc",
         horizon_days=45,
         observed_at="2026-11-23T06:00:00+00:00",
-        adverse_outcome=False,
+        adverse_event=False,
         outcome_reason="test",
         evidence_ref="evidence://test",
     )
-
     with pytest.raises(ValueError, match="horizon_days"):
         observation.validate()
 
 
-def test_calibration_uses_frozen_pd():
-    decision = freeze_decision(
-        _borrower(),
-        datetime(2026, 10, 9, 6, 0, tzinfo=timezone.utc),
+def test_primary_endpoint_is_liquidation_or_health_factor_below_one():
+    healthy = classify_position_outcome(
+        PositionOutcomeMetrics(False, 1.12, 1.15, 0.10, 2_000)
     )
+    liquidation = classify_position_outcome(
+        PositionOutcomeMetrics(True, 1.01, 1.20, 0.05, 1_000)
+    )
+    hf_breach = classify_position_outcome(
+        PositionOutcomeMetrics(False, 0.99, 1.08, 0.10, 1_000)
+    )
+
+    assert healthy.primary_adverse_event is False
+    assert liquidation.primary_adverse_event is True
+    assert hf_breach.primary_adverse_event is True
+
+
+def test_secondary_distress_does_not_relabel_primary_endpoint():
+    result = classify_position_outcome(
+        PositionOutcomeMetrics(False, 1.05, 1.08, 0.20, 2_000)
+    )
+    assert result.primary_adverse_event is False
+    assert result.secondary_distress_event is True
+
+
+def test_calibration_is_labeled_as_proxy_event_not_default_pd():
+    decision = freeze_decision(_borrower(), datetime(2026, 10, 9, 6, 0, tzinfo=timezone.utc))
     outcome = OutcomeObservation(
         decision_id=decision.decision_id,
         horizon_days=30,
         observed_at="2026-11-08T06:00:00+00:00",
-        adverse_outcome=True,
-        outcome_reason="paper adverse outcome",
+        adverse_event=True,
+        outcome_reason="primary on-chain adverse event",
         evidence_ref="evidence://forward-001/30d",
     )
 
     summary = calibration_summary([decision], [outcome], horizon_days=30)
 
     assert summary["observations"] == 1
-    assert summary["adverse_outcomes"] == 1
-    assert summary["mean_predicted_pd"] == decision.estimated_pd
+    assert summary["adverse_events"] == 1
+    assert summary["mean_model_risk_probability"] == decision.model_risk_probability
+    assert summary["probability_semantics"] == MODEL_PROBABILITY_SEMANTICS
     assert summary["brier_score"] > 0
