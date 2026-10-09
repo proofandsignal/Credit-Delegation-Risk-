@@ -16,6 +16,21 @@ The first build deliberately does **not** originate real loans or move funds. It
 - reproducible Synthetic 100 generation
 - CI-backed tests
 
+## v0.2 — Forward 50
+
+The next build freezes real public-wallet decisions at T0 and records 30/60/90-day outcomes without hindsight edits.
+
+Core invariants:
+
+- the original decision is immutable
+- the T0 borrower input is fingerprinted
+- only 30/60/90-day horizons are accepted
+- an outcome for the same decision+horizon cannot be overwritten
+- adverse-outcome labels are explicit evidence-backed observations, not claims about a person's legal creditworthiness
+- calibration uses the original frozen estimated PD
+
+See [docs/V0_2_FORWARD_50.md](docs/V0_2_FORWARD_50.md).
+
 ## Architecture
 
 ```text
@@ -25,11 +40,11 @@ Credit Risk Engine
       ↓
 Decision Engine
       ↓
-Credit Limit + Pricing
+Frozen T0 Decision
       ↓
-Paper Credit Portfolio
+30 / 60 / 90d Outcome Ledger
       ↓
-Future: Monitoring + 30/60/90d Outcomes
+Calibration / Model Error
 ```
 
 ## Quick start
@@ -40,10 +55,8 @@ credit-risk synthetic100 --out data/generated
 pytest
 ```
 
-Generated datasets are intentionally ignored by git. The source of truth is the deterministic generator and its seed.
+Generated datasets are intentionally ignored by git. The source of truth for v0.1 is the deterministic generator and its seed. Forward-50 evidence inputs will be versioned separately from derived outputs.
 
 ## Safety / scope
 
-This repository is research and software infrastructure. v0.1 does not custody assets, execute Aave credit delegation, provide real-world lending, or claim that a wallet score proves a person's creditworthiness.
-
-See [docs/V0_1_SPEC.md](docs/V0_1_SPEC.md).
+This repository is research and software infrastructure. It does not custody assets, execute Aave credit delegation, provide real-world lending, identify the legal owner of a wallet, or claim that a wallet score proves a person's creditworthiness.
