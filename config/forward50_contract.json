@@ -1,0 +1,64 @@
+{
+  "contract_version": "0.2.1",
+  "registered_at": "2026-10-09",
+  "experiment": "FORWARD_50",
+  "target_size": 50,
+  "scope": {
+    "chain_id": 1,
+    "chain": "ethereum",
+    "protocol": "aave-v3",
+    "market_pool": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
+    "unit_of_analysis": "public on-chain borrowing position",
+    "identity_inference": false
+  },
+  "discovery": {
+    "source_event": "Borrow(address,address,address,uint256,uint8,uint256,uint16)",
+    "debt_holder_field": "onBehalfOf",
+    "lookback_days": 365,
+    "minimum_protocol_history_days": 90,
+    "snapshot_rule": "latest_block_at_run_start_or_explicit_fixed_block",
+    "ranking": "sha256(seed|lowercase_wallet|snapshot_block)",
+    "seed": "forward50-v0.2-pre-registered-2026-10-09",
+    "outcome_blind": true
+  },
+  "eligibility": {
+    "minimum_wallet_history_days": 90,
+    "minimum_active_debt_usd": 1000,
+    "minimum_collateral_usd": 2500,
+    "minimum_t0_health_factor": 1,
+    "exclude_protocol_system_addresses": true,
+    "require_primary_or_protocol_evidence": true
+  },
+  "selection": {
+    "method": "deterministic_sha256_rank",
+    "seed": "forward50-v0.2-pre-registered-2026-10-09",
+    "outcome_blind": true
+  },
+  "horizons_days": [
+    30,
+    60,
+    90
+  ],
+  "primary_endpoint": {
+    "name": "onchain_adverse_credit_risk_event",
+    "semantics": "proxy event, not borrower default",
+    "positive_if_any": [
+      "aave_liquidation_event",
+      "observed_health_factor_below_1_0"
+    ],
+    "required_evidence_tier": "A_DIRECT_ONCHAIN"
+  },
+  "secondary_endpoint": {
+    "name": "onchain_distress_event",
+    "positive_if_any": [
+      "primary_endpoint_positive",
+      "final_health_factor_below_1_10_with_debt_at_least_500_usd",
+      "collateral_drawdown_at_least_50_percent_with_debt_at_least_500_usd"
+    ]
+  },
+  "prohibited_labeling": [
+    "do_not_call_proxy_event_a_borrower_default",
+    "do_not_infer_legal_identity_or_personal_creditworthiness",
+    "do_not_use_post_T0_information_for_T0_scoring_or_selection"
+  ]
+}
