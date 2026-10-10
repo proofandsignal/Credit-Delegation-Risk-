@@ -1,0 +1,105 @@
+name: Forward 50 Freeze T0
+
+on:
+  push:
+    branches:
+      - build/v0.2-forward-50
+    paths:
+      - ".github/workflows/forward50-freeze-t0.yml"
+  workflow_dispatch:
+    inputs:
+      snapshot_block:
+        description: "Optional fixed Ethereum block number"
+        required: false
+        type: string
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AAVE_RPC_URL: ${{ secrets.AAVE_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require RPC secret
+        run: |
+          if [ -z "$AAVE_RPC_URL" ]; then
+            echo "Missing repository secret: AAVE_RPC_URL"
+            exit 1
+          fi
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest -q
+
+      - name: Freeze snapshot block
+        id: snapshot
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.snapshot_block }}" ]; then
+            BLOCK="${{ inputs.snapshot_block }}"
+          else
+            BLOCK="$(python - <<'PY'
+          import os
+          from credit_delegation_risk.rpc import JsonRpcClient
+          rpc = JsonRpcClient(os.environ["AAVE_RPC_URL"])
+          print(rpc.block_number())
+          PY
+          )"
+          fi
+          echo "block=$BLOCK" >> "$GITHUB_OUTPUT"
+          echo "Frozen snapshot block: $BLOCK"
+
+      - name: Collect Forward 50 T0
+        run: |
+          credit-risk forward50-live \
+            --snapshot-block "${{ steps.snapshot.outputs.block }}" \
+            --out data/forward50/t0.json
+
+      - name: Validate artifact shape
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("data/forward50/t0.json")
+          data = json.loads(path.read_text())
+          rows = data["records"]
+
+          assert data["record_count"] == 50
+          assert len(rows) == 50
+
+          blocks = {row["snapshot_block"] for row in rows}
+          hashes = {row["snapshot_block_hash"] for row in rows}
+
+          assert len(blocks) == 1
+          assert len(hashes) == 1
+          assert all(row["active_debt_usd"] >= 1000 for row in rows)
+          assert all(row["collateral_usd"] >= 2500 for row in rows)
+          assert all(row["health_factor"] >= 1.0 for row in rows)
+          assert all(len(row["evidence"]) >= 2 for row in rows)
+
+          print(f"Validated 50 records at block {next(iter(blocks))}")
+          PY
+
+      - name: Write run summary
+        run: |
+          echo "## FORWARD 50 — T0 candidate artifact" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Snapshot block: ${{ steps.snapshot.outputs.block }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Records: 50" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Status: candidate artifact generated; requires reproducibility review before T0 FROZEN" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forward50-t0-candidate
+          path: data/forward50/t0.json
+          if-no-files-found: error
