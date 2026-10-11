@@ -1,0 +1,160 @@
+name: Forward 50 Freeze T0
+
+on:
+  push:
+    branches:
+      - build/v0.2-forward-50
+    paths:
+      - ".github/workflows/forward50-freeze-t0.yml"
+      - "src/credit_delegation_risk/**"
+      - "config/forward50_runtime.json"
+      - "config/forward50_model_v0.2.0.json"
+  workflow_dispatch:
+    inputs:
+      snapshot_block:
+        description: "Optional fixed Ethereum block number"
+        required: false
+        type: string
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      AAVE_RPC_URL: ${{ secrets.AAVE_RPC_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require RPC secret
+        run: |
+          if [ -z "$AAVE_RPC_URL" ]; then
+            echo "Missing repository secret: AAVE_RPC_URL"
+            exit 1
+          fi
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest -q
+
+      - name: Freeze snapshot block
+        id: snapshot
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.snapshot_block }}" ]; then
+            BLOCK="${{ inputs.snapshot_block }}"
+          else
+            BLOCK="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          runtime = json.loads(Path("config/forward50_runtime.json").read_text())
+          print(runtime["candidate_t0_block"])
+          PY
+          )"
+          fi
+          echo "block=$BLOCK" >> "$GITHUB_OUTPUT"
+          echo "Frozen snapshot block: $BLOCK"
+
+      - name: Collect Forward 50 T0
+        run: |
+          credit-risk forward50-live \
+            --snapshot-block "${{ steps.snapshot.outputs.block }}" \
+            --out data/forward50/t0.json
+
+      - name: Validate cohort artifact
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          path = Path("data/forward50/t0.json")
+          raw = path.read_bytes()
+          data = json.loads(raw)
+          rows = data["records"]
+
+          assert data["record_count"] == 50
+          assert len(rows) == 50
+
+          blocks = {row["snapshot_block"] for row in rows}
+          hashes = {row["snapshot_block_hash"] for row in rows}
+          wallets = {row["wallet_address"] for row in rows}
+
+          assert len(blocks) == 1
+          assert len(hashes) == 1
+          assert len(wallets) == 50
+          assert all(row["active_debt_usd"] >= 1000 for row in rows)
+          assert all(row["collateral_usd"] >= 2500 for row in rows)
+          assert all(row["health_factor"] >= 1.0 for row in rows)
+          assert all(len(row["evidence"]) >= 3 for row in rows)
+
+          for row in rows:
+            tiers = {item["tier"] for item in row["evidence"]}
+            assert "A_DIRECT_ONCHAIN" in tiers
+            assert "B_PROTOCOL_DERIVED" in tiers
+
+          print(f"Validated 50 unique records at block {next(iter(blocks))}")
+          print(f"Snapshot hash: {next(iter(hashes))}")
+          print(f"T0 JSON SHA256: {hashlib.sha256(raw).hexdigest()}")
+          print(f"HF min/max: {min(r['health_factor'] for r in rows)} / {max(r['health_factor'] for r in rows)}")
+          print(f"Debt total USD: {sum(r['active_debt_usd'] for r in rows):.2f}")
+          print(f"Collateral total USD: {sum(r['collateral_usd'] for r in rows):.2f}")
+          PY
+
+      - name: Freeze T0 model decisions
+        run: |
+          credit-risk forward50-freeze-decisions \
+            --t0 data/forward50/t0.json \
+            --out data/forward50/t0_decisions.json
+
+      - name: Validate decision artifact
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          path = Path("data/forward50/t0_decisions.json")
+          raw = path.read_bytes()
+          data = json.loads(raw)
+          rows = data["records"]
+
+          assert data["record_count"] == 50
+          assert len(rows) == 50
+          assert len({row["wallet_address"] for row in rows}) == 50
+          assert data["model_version"] == "forward-position-risk-v0.2.0"
+          assert data["model_registration"]["future_outcome_data_seen"] is False
+          assert all(row["snapshot_block"] == 26167261 for row in rows)
+          assert all(row["probability_semantics"].endswith("not_borrower_default") for row in rows)
+
+          counts = {
+              label: sum(1 for row in rows if row["paper_decision"] == label)
+              for label in ("APPROVE_PAPER", "REVIEW_PAPER", "REJECT_PAPER")
+          }
+          print(f"Decision artifact SHA256: {hashlib.sha256(raw).hexdigest()}")
+          print(f"Decision counts: {counts}")
+          print(f"Average score: {sum(row['risk_score'] for row in rows) / len(rows):.2f}")
+          PY
+
+      - name: Write run summary
+        run: |
+          echo "## FORWARD 50 — T0 freeze candidate" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Snapshot block: ${{ steps.snapshot.outputs.block }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Cohort records: 50" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Frozen model: forward-position-risk-v0.2.0" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Status: cohort + decisions generated; hash review required before full T0 FROZEN" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forward50-t0-freeze
+          path: |
+            data/forward50/t0.json
+            data/forward50/t0_decisions.json
+          if-no-files-found: error

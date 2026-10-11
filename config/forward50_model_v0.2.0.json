@@ -1,0 +1,51 @@
+{
+  "model_version": "forward-position-risk-v0.2.0",
+  "registered_on": "2026-10-11",
+  "target": "registered_onchain_adverse_credit_risk_event_proxy",
+  "not_target": "borrower_default_or_personal_creditworthiness",
+  "registration_provenance": {
+    "t0_cohort_data_seen": true,
+    "future_outcome_data_seen": false,
+    "pre_cohort_preregistered": false,
+    "note": "Frozen after the T0 cohort was collected and reproduced, but before any T+30/T+60/T+90 outcome observation."
+  },
+  "features": [
+    "health_factor",
+    "debt_to_collateral",
+    "protocol_history_days"
+  ],
+  "score": {
+    "base": 100,
+    "health_factor_penalties": [
+      {"lt": 1.05, "penalty": 55},
+      {"lt": 1.10, "penalty": 45},
+      {"lt": 1.25, "penalty": 30},
+      {"lt": 1.50, "penalty": 20},
+      {"lt": 2.00, "penalty": 10}
+    ],
+    "debt_to_collateral_penalties": [
+      {"gt": 0.85, "penalty": 20},
+      {"gt": 0.70, "penalty": 12},
+      {"gt": 0.50, "penalty": 5}
+    ],
+    "history_penalties": [
+      {"lt_days": 120, "penalty": 8},
+      {"lt_days": 180, "penalty": 4}
+    ],
+    "clamp": [0, 100]
+  },
+  "paper_decision": {
+    "approve_min_score": 70,
+    "review_min_score": 55,
+    "labels": [
+      "APPROVE_PAPER",
+      "REVIEW_PAPER",
+      "REJECT_PAPER"
+    ]
+  },
+  "probability_proxy": {
+    "formula": "0.01 + ((100 - score) / 100)^2 * 0.34",
+    "clamp": [0.01, 0.35],
+    "semantics": "proxy_probability_of_registered_onchain_adverse_credit_risk_event_not_borrower_default"
+  }
+}

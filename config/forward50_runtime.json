@@ -1,0 +1,7 @@
+{
+  "candidate_t0_block": 26167261,
+  "locked_from_workflow_run": 38020461632,
+  "locked_from_attempt": 2,
+  "rationale": "Snapshot block was successfully frozen before cohort collection failed on provider eth_getLogs range limits. Reuse this block for repair retries to prevent T0 drift.",
+  "reproducibility_check_requested": true
+}

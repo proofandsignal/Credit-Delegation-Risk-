@@ -3,9 +3,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 from pathlib import Path
 
+from .live_aave import build_live_forward50, write_forward50
 from .portfolio import build_paper_portfolio
+from .position_model import freeze_decisions_file
+from .rpc import JsonRpcClient
 from .synthetic import generate_borrowers
 
 
@@ -47,6 +51,22 @@ def run_synthetic100(out_dir: str, seed: int) -> dict:
     return summary
 
 
+def run_forward50(out_path: str, snapshot_block: int | None) -> dict:
+    rpc_url = os.environ.get("AAVE_RPC_URL", "")
+    if not rpc_url:
+        raise SystemExit("AAVE_RPC_URL is required for live Forward 50 collection")
+
+    rpc = JsonRpcClient(rpc_url)
+    records = build_live_forward50(rpc, snapshot_block=snapshot_block)
+    path = write_forward50(records, out_path)
+    return {
+        "records": len(records),
+        "snapshot_block": records[0].snapshot_block,
+        "snapshot_at": records[0].snapshot_at,
+        "output": str(path),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="credit-risk")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -55,9 +75,27 @@ def main() -> None:
     synthetic.add_argument("--out", default="data/generated")
     synthetic.add_argument("--seed", type=int, default=42)
 
+    forward = sub.add_parser(
+        "forward50-live",
+        help="Collect the pre-registered live Aave v3 Ethereum Forward 50 T0 cohort",
+    )
+    forward.add_argument("--out", default="data/forward50/t0.json")
+    forward.add_argument("--snapshot-block", type=int, default=None)
+
+    decisions = sub.add_parser(
+        "forward50-freeze-decisions",
+        help="Freeze the v0.2 position-risk baseline decisions from an existing T0 cohort",
+    )
+    decisions.add_argument("--t0", default="data/forward50/t0.json")
+    decisions.add_argument("--out", default="data/forward50/t0_decisions.json")
+
     args = parser.parse_args()
     if args.command == "synthetic100":
         print(json.dumps(run_synthetic100(args.out, args.seed), indent=2))
+    elif args.command == "forward50-live":
+        print(json.dumps(run_forward50(args.out, args.snapshot_block), indent=2))
+    elif args.command == "forward50-freeze-decisions":
+        print(json.dumps(freeze_decisions_file(args.t0, args.out), indent=2))
 
 
 if __name__ == "__main__":
