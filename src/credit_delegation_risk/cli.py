@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .live_aave import build_live_forward50, write_forward50
 from .portfolio import build_paper_portfolio
+from .position_model import freeze_decisions_file
 from .rpc import JsonRpcClient
 from .synthetic import generate_borrowers
 
@@ -81,11 +82,20 @@ def main() -> None:
     forward.add_argument("--out", default="data/forward50/t0.json")
     forward.add_argument("--snapshot-block", type=int, default=None)
 
+    decisions = sub.add_parser(
+        "forward50-freeze-decisions",
+        help="Freeze the v0.2 position-risk baseline decisions from an existing T0 cohort",
+    )
+    decisions.add_argument("--t0", default="data/forward50/t0.json")
+    decisions.add_argument("--out", default="data/forward50/t0_decisions.json")
+
     args = parser.parse_args()
     if args.command == "synthetic100":
         print(json.dumps(run_synthetic100(args.out, args.seed), indent=2))
     elif args.command == "forward50-live":
         print(json.dumps(run_forward50(args.out, args.snapshot_block), indent=2))
+    elif args.command == "forward50-freeze-decisions":
+        print(json.dumps(freeze_decisions_file(args.t0, args.out), indent=2))
 
 
 if __name__ == "__main__":
