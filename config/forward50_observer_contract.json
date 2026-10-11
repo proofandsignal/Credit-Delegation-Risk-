@@ -1,0 +1,54 @@
+{
+  "contract_version": "0.3.0",
+  "registered_on": "2026-10-11",
+  "experiment": "FORWARD_50",
+  "purpose": "prospective outcome observation without changing frozen T0 predictions",
+  "baseline": {
+    "actions_artifact_id": 11694242426,
+    "t0_snapshot_block": 26167261,
+    "t0_snapshot_hash": "0xbed220d742b21a51da74801865c30bb05bd8eda7c1a4a5715cc85cb1037716a1",
+    "t0_snapshot_at": "2026-10-11T05:57:11+00:00",
+    "t0_dataset_sha256": "aa02bbee8382908068bfb36e4ec7b853da9adac089516668c2fca7a9ef9a8313",
+    "decision_artifact_sha256": "e7d604f28a85721ec8443056830a09a7e406a101241a2d89fc95b0ea340c66c9",
+    "model_version": "forward-position-risk-v0.2.0"
+  },
+  "observation": {
+    "cadence": "daily_best_effort",
+    "scheduled_utc": "06:15",
+    "state_source": "block-pinned Aave getUserAccountData",
+    "liquidation_detection": "cumulative T0-to-observation debt-token transfer discovery plus direct Aave LiquidationCall receipt verification",
+    "health_factor_endpoint_semantics": "Health Factor below 1.0 at any retained scheduled block-pinned sample",
+    "minimum_sample_coverage_ratio_for_checkpoint": 0.8,
+    "checkpoint_final_sample_max_delay_hours": 6
+  },
+  "primary_endpoint": {
+    "name": "onchain_adverse_credit_risk_event",
+    "positive_if_any": [
+      "directly_verified_aave_liquidation_since_T0",
+      "sampled_health_factor_below_1_0"
+    ],
+    "not_equivalent_to": "borrower_default"
+  },
+  "secondary_endpoint": {
+    "positive_if_any": [
+      "primary_endpoint_positive",
+      "final_health_factor_below_1_10_with_debt_at_least_500_usd",
+      "final_collateral_drawdown_at_least_50_percent_with_debt_at_least_500_usd"
+    ]
+  },
+  "checkpoint_metrics": [
+    "event_rate",
+    "brier_score",
+    "calibration_gap",
+    "absolute_calibration_gap",
+    "performance_by_paper_decision",
+    "false_negative_cases"
+  ],
+  "false_negative_definition": "APPROVE_PAPER at T0 and primary adverse event observed by checkpoint",
+  "checkpoints_utc": {
+    "30": "2026-11-10T05:57:11+00:00",
+    "60": "2026-12-10T05:57:11+00:00",
+    "90": "2027-01-09T05:57:11+00:00"
+  },
+  "immutability": "Observer and checkpoint code may evolve only through new versions; frozen T0 cohort, baseline model, T0 decisions and their hashes cannot be replaced."
+}

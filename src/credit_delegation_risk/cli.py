@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from .live_aave import build_live_forward50, write_forward50
+from .observer import aggregate_checkpoint_files, observe_forward50_files
 from .portfolio import build_paper_portfolio
 from .position_model import freeze_decisions_file
 from .rpc import JsonRpcClient
@@ -67,6 +68,25 @@ def run_forward50(out_path: str, snapshot_block: int | None) -> dict:
     }
 
 
+def run_observer(
+    t0_path: str,
+    decisions_path: str,
+    out_path: str,
+    observed_block: int | None,
+) -> dict:
+    rpc_url = os.environ.get("AAVE_RPC_URL", "")
+    if not rpc_url:
+        raise SystemExit("AAVE_RPC_URL is required for Forward 50 observation")
+    rpc = JsonRpcClient(rpc_url)
+    return observe_forward50_files(
+        rpc,
+        t0_path=t0_path,
+        decisions_path=decisions_path,
+        out_path=out_path,
+        observed_block=observed_block,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="credit-risk")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -89,6 +109,25 @@ def main() -> None:
     decisions.add_argument("--t0", default="data/forward50/t0.json")
     decisions.add_argument("--out", default="data/forward50/t0_decisions.json")
 
+    observer = sub.add_parser(
+        "forward50-observe",
+        help="Observe the frozen Forward 50 cohort without changing T0 predictions",
+    )
+    observer.add_argument("--t0", required=True)
+    observer.add_argument("--decisions", required=True)
+    observer.add_argument("--out", default="data/forward50/observation.json")
+    observer.add_argument("--observed-block", type=int, default=None)
+
+    checkpoint = sub.add_parser(
+        "forward50-checkpoint",
+        help="Aggregate retained Forward 50 observations at T+30/T+60/T+90",
+    )
+    checkpoint.add_argument("--decisions", required=True)
+    checkpoint.add_argument("--observations-dir", required=True)
+    checkpoint.add_argument("--horizon", type=int, choices=[30, 60, 90], required=True)
+    checkpoint.add_argument("--prior-checkpoint", default=None)
+    checkpoint.add_argument("--out", default="data/forward50/checkpoint.json")
+
     args = parser.parse_args()
     if args.command == "synthetic100":
         print(json.dumps(run_synthetic100(args.out, args.seed), indent=2))
@@ -96,6 +135,31 @@ def main() -> None:
         print(json.dumps(run_forward50(args.out, args.snapshot_block), indent=2))
     elif args.command == "forward50-freeze-decisions":
         print(json.dumps(freeze_decisions_file(args.t0, args.out), indent=2))
+    elif args.command == "forward50-observe":
+        print(
+            json.dumps(
+                run_observer(
+                    args.t0,
+                    args.decisions,
+                    args.out,
+                    args.observed_block,
+                ),
+                indent=2,
+            )
+        )
+    elif args.command == "forward50-checkpoint":
+        print(
+            json.dumps(
+                aggregate_checkpoint_files(
+                    decisions_path=args.decisions,
+                    observations_dir=args.observations_dir,
+                    horizon_days=args.horizon,
+                    out_path=args.out,
+                    prior_checkpoint_path=args.prior_checkpoint,
+                ),
+                indent=2,
+            )
+        )
 
 
 if __name__ == "__main__":
