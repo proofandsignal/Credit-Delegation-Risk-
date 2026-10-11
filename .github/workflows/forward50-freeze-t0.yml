@@ -6,6 +6,8 @@ on:
       - build/v0.2-forward-50
     paths:
       - ".github/workflows/forward50-freeze-t0.yml"
+      - "src/credit_delegation_risk/**"
+      - "config/forward50_runtime.json"
   workflow_dispatch:
     inputs:
       snapshot_block:
@@ -48,10 +50,10 @@ jobs:
             BLOCK="${{ inputs.snapshot_block }}"
           else
             BLOCK="$(python - <<'PY'
-          import os
-          from credit_delegation_risk.rpc import JsonRpcClient
-          rpc = JsonRpcClient(os.environ["AAVE_RPC_URL"])
-          print(rpc.block_number())
+          import json
+          from pathlib import Path
+          runtime = json.loads(Path("config/forward50_runtime.json").read_text())
+          print(runtime["candidate_t0_block"])
           PY
           )"
           fi
@@ -79,15 +81,26 @@ jobs:
 
           blocks = {row["snapshot_block"] for row in rows}
           hashes = {row["snapshot_block_hash"] for row in rows}
+          wallets = {row["wallet_address"] for row in rows}
 
           assert len(blocks) == 1
           assert len(hashes) == 1
+          assert len(wallets) == 50
           assert all(row["active_debt_usd"] >= 1000 for row in rows)
           assert all(row["collateral_usd"] >= 2500 for row in rows)
           assert all(row["health_factor"] >= 1.0 for row in rows)
-          assert all(len(row["evidence"]) >= 2 for row in rows)
+          assert all(len(row["evidence"]) >= 3 for row in rows)
 
-          print(f"Validated 50 records at block {next(iter(blocks))}")
+          for row in rows:
+            tiers = {item["tier"] for item in row["evidence"]}
+            assert "A_DIRECT_ONCHAIN" in tiers
+            assert "B_PROTOCOL_DERIVED" in tiers
+
+          print(f"Validated 50 unique records at block {next(iter(blocks))}")
+          print(f"Snapshot hash: {next(iter(hashes))}")
+          print(f"HF min/max: {min(r['health_factor'] for r in rows)} / {max(r['health_factor'] for r in rows)}")
+          print(f"Debt total USD: {sum(r['active_debt_usd'] for r in rows):.2f}")
+          print(f"Collateral total USD: {sum(r['collateral_usd'] for r in rows):.2f}")
           PY
 
       - name: Write run summary

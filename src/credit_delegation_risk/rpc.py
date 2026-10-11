@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -36,6 +37,15 @@ class JsonRpcClient:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                error_body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                error_body = ""
+            suffix = f": {error_body}" if error_body else ""
+            raise JsonRpcError(
+                f"RPC request failed for {method}: HTTP {exc.code}{suffix}"
+            ) from exc
         except Exception as exc:
             raise JsonRpcError(f"RPC request failed for {method}: {exc}") from exc
 
@@ -79,6 +89,18 @@ class JsonRpcClient:
             "eth_call",
             [{"to": to, "data": data}, hex(block_number)],
         )
+
+    def transaction_receipt(self, tx_hash: str) -> dict[str, Any]:
+        result = self.call("eth_getTransactionReceipt", [tx_hash])
+        if result is None:
+            raise JsonRpcError(f"transaction receipt not found: {tx_hash}")
+        return result
+
+    def asset_transfers(self, params: dict[str, Any]) -> dict[str, Any]:
+        result = self.call("alchemy_getAssetTransfers", [params])
+        if not isinstance(result, dict):
+            raise JsonRpcError("alchemy_getAssetTransfers returned non-object result")
+        return result
 
     def keccak_text(self, text: str) -> str:
         encoded = "0x" + text.encode("utf-8").hex()

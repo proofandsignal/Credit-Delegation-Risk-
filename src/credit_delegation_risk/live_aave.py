@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from .cohort import (
     FORWARD50_SEED,
@@ -22,7 +22,6 @@ SECONDS_PER_DAY = 86_400
 HEALTH_FACTOR_UNIT = 10**18
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
-# Explicit core-address denylist only. Smart-contract borrowers are otherwise allowed.
 PROTOCOL_SYSTEM_ADDRESSES = {
     AAVE_V3_ETHEREUM_POOL.lower(),
     AAVE_V3_ETHEREUM_ADDRESSES_PROVIDER.lower(),
@@ -32,8 +31,9 @@ PROTOCOL_SYSTEM_ADDRESSES = {
 class RpcLike(Protocol):
     def block_number(self) -> int: ...
     def block(self, number: int) -> dict: ...
-    def logs(self, *, address: str, from_block: int, to_block: int, topics: list[str | None]) -> list[dict]: ...
     def eth_call(self, *, to: str, data: str, block_number: int) -> str: ...
+    def transaction_receipt(self, tx_hash: str) -> dict: ...
+    def asset_transfers(self, params: dict[str, Any]) -> dict: ...
     def keccak_text(self, text: str) -> str: ...
 
 
@@ -42,6 +42,7 @@ class BorrowHistory:
     wallet_address: str
     earliest_borrow_block: int
     earliest_borrow_tx: str
+    variable_debt_token: str
 
 
 @dataclass(frozen=True)
@@ -62,6 +63,7 @@ class LiveCandidateRecord:
     snapshot_at: str
     earliest_borrow_block: int
     earliest_borrow_tx: str
+    variable_debt_token: str
     protocol_history_days: int
     collateral_usd: float
     active_debt_usd: float
@@ -90,11 +92,34 @@ def _decode_words(data: str, count: int) -> list[int]:
     return [int(clean[i * 64 : (i + 1) * 64], 16) for i in range(count)]
 
 
-def _decode_address_word(data: str) -> str:
+def _decode_address_word(data: str, word_index: int = 0) -> str:
     clean = data.removeprefix("0x")
-    if len(clean) < 64:
+    start = word_index * 64
+    word = clean[start : start + 64]
+    if len(word) != 64:
         raise ValueError("address return value is too short")
-    return "0x" + clean[24:64]
+    return "0x" + word[-40:]
+
+
+def _decode_address_array(data: str) -> list[str]:
+    clean = data.removeprefix("0x")
+    if len(clean) < 128:
+        raise ValueError("dynamic address array return value is too short")
+
+    offset_bytes = int(clean[0:64], 16)
+    offset = offset_bytes * 2
+    if len(clean) < offset + 64:
+        raise ValueError("invalid dynamic array offset")
+
+    length = int(clean[offset : offset + 64], 16)
+    cursor = offset + 64
+    addresses: list[str] = []
+    for index in range(length):
+        word = clean[cursor + index * 64 : cursor + (index + 1) * 64]
+        if len(word) != 64:
+            raise ValueError("truncated dynamic address array")
+        addresses.append("0x" + word[-40:])
+    return addresses
 
 
 def _topic_address(topic: str) -> str:
@@ -125,6 +150,48 @@ def find_block_at_or_before_timestamp(rpc: RpcLike, timestamp: int, latest_block
     return best
 
 
+def get_variable_debt_tokens(
+    rpc: RpcLike,
+    snapshot_block: int,
+) -> dict[str, str]:
+    reserves_selector = _selector(rpc, "getReservesList()")
+    reserves_raw = rpc.eth_call(
+        to=AAVE_V3_ETHEREUM_POOL,
+        data=reserves_selector,
+        block_number=snapshot_block,
+    )
+    reserves = _decode_address_array(reserves_raw)
+
+    provider_selector = _selector(rpc, "ADDRESSES_PROVIDER()")
+    provider_raw = rpc.eth_call(
+        to=AAVE_V3_ETHEREUM_POOL,
+        data=provider_selector,
+        block_number=snapshot_block,
+    )
+    provider = _decode_address_word(provider_raw)
+
+    data_provider_selector = _selector(rpc, "getPoolDataProvider()")
+    data_provider_raw = rpc.eth_call(
+        to=provider,
+        data=data_provider_selector,
+        block_number=snapshot_block,
+    )
+    data_provider = _decode_address_word(data_provider_raw)
+
+    tokens: dict[str, str] = {}
+    reserve_tokens_selector = _selector(rpc, "getReserveTokensAddresses(address)")
+    for reserve in reserves:
+        raw = rpc.eth_call(
+            to=data_provider,
+            data=reserve_tokens_selector + _encode_address(reserve),
+            block_number=snapshot_block,
+        )
+        variable_debt = _decode_address_word(raw, 2).lower()
+        if variable_debt != ZERO_ADDRESS:
+            tokens[variable_debt] = reserve.lower()
+    return tokens
+
+
 def discover_established_borrowers(
     rpc: RpcLike,
     *,
@@ -132,43 +199,79 @@ def discover_established_borrowers(
     snapshot_timestamp: int,
     lookback_days: int = 365,
     minimum_history_days: int = 90,
-    chunk_blocks: int = 25_000,
 ) -> dict[str, BorrowHistory]:
     if lookback_days <= minimum_history_days:
         raise ValueError("lookback_days must exceed minimum_history_days")
-    if chunk_blocks <= 0:
-        raise ValueError("chunk_blocks must be positive")
 
     oldest_ts = snapshot_timestamp - lookback_days * SECONDS_PER_DAY
     cutoff_ts = snapshot_timestamp - minimum_history_days * SECONDS_PER_DAY
     start_block = find_block_at_or_before_timestamp(rpc, oldest_ts, snapshot_block)
     cutoff_block = find_block_at_or_before_timestamp(rpc, cutoff_ts, snapshot_block)
 
-    borrow_topic = rpc.keccak_text(BORROW_EVENT_SIGNATURE)
+    debt_tokens = get_variable_debt_tokens(rpc, snapshot_block)
     found: dict[str, BorrowHistory] = {}
 
-    cursor = start_block
-    while cursor <= cutoff_block:
-        end = min(cursor + chunk_blocks - 1, cutoff_block)
-        logs = rpc.logs(
-            address=AAVE_V3_ETHEREUM_POOL,
-            from_block=cursor,
-            to_block=end,
-            topics=[borrow_topic],
-        )
-        for log in logs:
-            topics = log.get("topics", [])
-            if len(topics) < 3:
-                continue
-            wallet = _topic_address(topics[2]).lower()
-            block_number = int(log["blockNumber"], 16)
-            tx_hash = log["transactionHash"]
-            previous = found.get(wallet)
-            if previous is None or block_number < previous.earliest_borrow_block:
-                found[wallet] = BorrowHistory(wallet, block_number, tx_hash)
-        cursor = end + 1
+    for variable_debt_token in sorted(debt_tokens):
+        page_key: str | None = None
+        while True:
+            params: dict[str, Any] = {
+                "fromBlock": hex(start_block),
+                "toBlock": hex(cutoff_block),
+                "fromAddress": ZERO_ADDRESS,
+                "contractAddresses": [variable_debt_token],
+                "category": ["erc20"],
+                "excludeZeroValue": True,
+                "withMetadata": False,
+                "maxCount": "0x3e8",
+                "order": "asc",
+            }
+            if page_key:
+                params["pageKey"] = page_key
+
+            result = rpc.asset_transfers(params)
+            for transfer in result.get("transfers", []):
+                wallet = (transfer.get("to") or "").lower()
+                tx_hash = transfer.get("hash") or ""
+                block_hex = transfer.get("blockNum") or ""
+                if not wallet.startswith("0x") or len(wallet) != 42:
+                    continue
+                if not tx_hash.startswith("0x") or not block_hex:
+                    continue
+                block_number = int(block_hex, 16)
+                previous = found.get(wallet)
+                if previous is None or block_number < previous.earliest_borrow_block:
+                    found[wallet] = BorrowHistory(
+                        wallet_address=wallet,
+                        earliest_borrow_block=block_number,
+                        earliest_borrow_tx=tx_hash,
+                        variable_debt_token=variable_debt_token,
+                    )
+
+            page_key = result.get("pageKey")
+            if not page_key:
+                break
 
     return found
+
+
+def verify_borrow_history(rpc: RpcLike, history: BorrowHistory) -> bool:
+    receipt = rpc.transaction_receipt(history.earliest_borrow_tx)
+    borrow_topic = rpc.keccak_text(BORROW_EVENT_SIGNATURE).lower()
+
+    for log in receipt.get("logs", []):
+        if (log.get("address") or "").lower() != AAVE_V3_ETHEREUM_POOL.lower():
+            continue
+        topics = log.get("topics") or []
+        if len(topics) < 3:
+            continue
+        if topics[0].lower() != borrow_topic:
+            continue
+        if _topic_address(topics[2]).lower() != history.wallet_address.lower():
+            continue
+        if int(log.get("blockNumber", "0x0"), 16) != history.earliest_borrow_block:
+            continue
+        return True
+    return False
 
 
 def get_account_state(rpc: RpcLike, wallet_address: str, snapshot_block: int) -> AccountState:
@@ -244,25 +347,42 @@ def build_live_forward50(
     records_by_wallet: dict[str, LiveCandidateRecord] = {}
 
     for item in ranked_history:
+        if not verify_borrow_history(rpc, item):
+            continue
+
         state = get_account_state(rpc, item.wallet_address, snapshot_block)
         collateral_usd = state.total_collateral_base / base_unit
         debt_usd = state.total_debt_base / base_unit
         health_factor = state.health_factor_raw / HEALTH_FACTOR_UNIT
 
-        if item.wallet_address.lower() in PROTOCOL_SYSTEM_ADDRESSES:
-            is_system = True
-        else:
-            is_system = False
+        is_system = item.wallet_address.lower() in PROTOCOL_SYSTEM_ADDRESSES
 
         earliest_block = rpc.block(item.earliest_borrow_block)
         earliest_ts = int(earliest_block["timestamp"], 16)
         history_days = max(0, (snapshot_timestamp - earliest_ts) // SECONDS_PER_DAY)
 
+        discovery_evidence = EvidenceRef(
+            evidence_id=(
+                f"alchemy-vdebt-mint:{item.variable_debt_token.lower()}:"
+                f"{item.earliest_borrow_tx.lower()}"
+            ),
+            tier=EvidenceTier.B_PROTOCOL_DERIVED,
+            source="alchemy-transfers-api",
+            locator=(
+                f"vdebt-mint:{item.variable_debt_token.lower()}:"
+                f"{item.earliest_borrow_tx.lower()}:{item.wallet_address.lower()}"
+            ),
+            observed_at=datetime.fromtimestamp(earliest_ts, tz=timezone.utc).isoformat(),
+            block_number=item.earliest_borrow_block,
+        )
         borrow_evidence = EvidenceRef(
             evidence_id=f"borrow:{item.earliest_borrow_tx.lower()}",
             tier=EvidenceTier.A_DIRECT_ONCHAIN,
-            source="ethereum-json-rpc",
-            locator=f"tx:{item.earliest_borrow_tx}",
+            source="ethereum-transaction-receipt",
+            locator=(
+                f"tx:{item.earliest_borrow_tx.lower()}:"
+                f"borrow:onBehalfOf:{item.wallet_address.lower()}"
+            ),
             observed_at=datetime.fromtimestamp(earliest_ts, tz=timezone.utc).isoformat(),
             block_number=item.earliest_borrow_block,
         )
@@ -288,10 +408,9 @@ def build_live_forward50(
             health_factor=health_factor,
             protocol="aave-v3",
             is_protocol_system_address=is_system,
-            evidence=(borrow_evidence, state_evidence),
+            evidence=(borrow_evidence, state_evidence, discovery_evidence),
         )
 
-        # select_forward50 owns the canonical eligibility predicate.
         try:
             selected = select_forward50([candidate], target_size=1)
         except ValueError:
@@ -307,6 +426,7 @@ def build_live_forward50(
             snapshot_at=snapshot_at,
             earliest_borrow_block=item.earliest_borrow_block,
             earliest_borrow_tx=item.earliest_borrow_tx,
+            variable_debt_token=item.variable_debt_token.lower(),
             protocol_history_days=int(history_days),
             collateral_usd=round(collateral_usd, 2),
             active_debt_usd=round(debt_usd, 2),

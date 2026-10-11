@@ -6,6 +6,12 @@ Create the first real Forward 50 cohort without manual wallet selection.
 
 The adapter is **read-only**. It does not sign transactions, custody funds, execute Aave credit delegation, or infer wallet-owner identity.
 
+## Fixed T0 repair rule
+
+Workflow attempt 2 successfully froze Ethereum block **26,167,261** before cohort collection failed on an RPC provider range limit.
+
+No cohort rows or outcomes were observed. Repair retries therefore reuse block 26,167,261 from `config/forward50_runtime.json` instead of drifting T0 during debugging.
+
 ## Official protocol anchors
 
 Forward 50 v0.2 is pinned to:
@@ -18,86 +24,45 @@ The adapter validates the market base currency from the Aave oracle before inter
 
 ## Discovery rule
 
-At the start of a run:
+Alchemy Free limits wide `eth_getLogs` ranges, so Forward 50 does not brute-force millions of blocks.
 
-1. freeze one Ethereum snapshot block;
-2. locate the blocks corresponding to T0-365 days and T0-90 days;
-3. scan Aave Pool `Borrow` events only within that pre-T0 discovery window;
-4. extract indexed `onBehalfOf`, the address receiving the debt;
-5. deduplicate addresses;
-6. rank them with the pre-registered SHA-256 rule;
-7. query current `getUserAccountData(address)` at the frozen T0 block;
-8. take the first 50 ranked addresses that pass the pre-registered eligibility contract.
+At the fixed T0 block the adapter:
 
-Scanning stops once 50 eligible addresses are found. This is mathematically equivalent to ranking the candidate universe and then taking the first 50 eligible candidates because eligibility is evaluated independently of the rank.
+1. reads Aave's reserve list on-chain;
+2. obtains each reserve's VariableDebtToken address from Aave's protocol data provider;
+3. maps T0-365d and T0-90d timestamps to Ethereum blocks;
+4. queries Alchemy Transfers API for ERC-20 mints from the zero address for each VariableDebtToken inside that pre-T0 window;
+5. treats the recipient as a **candidate debt-holder**, not yet accepted evidence;
+6. ranks candidates with the pre-registered SHA-256 rule;
+7. verifies each candidate's discovery transaction through a direct Ethereum transaction receipt and requires an Aave Pool `Borrow` event whose indexed `onBehalfOf` equals the candidate wallet;
+8. queries `getUserAccountData(address)` at the fixed T0 block;
+9. takes the first 50 ranked addresses that pass the pre-registered eligibility contract.
 
-## Why Borrow events
+The indexed Transfers API is therefore a discovery accelerator only. Acceptance is re-anchored to direct on-chain evidence.
 
-The Aave v3 Pool emits `Borrow` with indexed `onBehalfOf`. That field represents the address receiving the debt, including delegated-credit cases where the transaction caller differs from the debt holder.
+## Why VariableDebtToken mints
 
-For Forward 50 we are studying active Aave borrowing positions, not trying to identify natural persons.
+Aave variable-rate borrowing mints VariableDebtToken debt to the address receiving the debt. In delegated-credit cases this is still the debt-holder / `onBehalfOf` address.
 
-## T0 state
-
-The adapter calls the Pool's:
-
-`getUserAccountData(address)`
-
-at the frozen block and records:
-
-- total collateral in market base currency
-- total active debt in market base currency
-- available borrowing capacity
-- liquidation threshold
-- LTV
-- Health Factor
-
-The raw result is converted using the Aave oracle's `BASE_CURRENCY_UNIT()`, after confirming `BASE_CURRENCY()` is the USD sentinel address.
+The final receipt verification prevents an indexed-provider record from being accepted unless the same transaction contains the canonical Aave Pool Borrow event for that wallet.
 
 ## Evidence
 
-Every accepted record contains two Tier A references:
+Every accepted record contains:
 
-1. earliest observed qualifying Borrow transaction within the discovery window;
-2. block-pinned `eth_call` evidence for the T0 account state.
+- Tier B: Alchemy indexed VariableDebtToken mint discovery reference;
+- Tier A: direct Ethereum transaction receipt containing the matching Aave Borrow event;
+- Tier A: block-pinned `getUserAccountData` state evidence.
 
-It also records:
-
-- snapshot block
-- snapshot block hash
-- snapshot UTC timestamp
-- earliest qualifying Borrow block
-- transaction hash
-- protocol history days
-- collateral USD
-- debt USD
-- Health Factor
-- deterministic selection rank
-
-## Running
-
-Use a reliable archive-capable Ethereum RPC. Do not commit the RPC URL.
-
-```bash
-export AAVE_RPC_URL="..."
-credit-risk forward50-live --out data/forward50/t0.json
-```
-
-To reproduce against an already frozen block:
-
-```bash
-credit-risk forward50-live \
-  --snapshot-block <BLOCK_NUMBER> \
-  --out data/forward50/t0.json
-```
+It also records the VariableDebtToken used for discovery, snapshot block/hash, earliest qualifying Borrow block/transaction, protocol history days, collateral, debt, Health Factor and deterministic selection rank.
 
 ## GitHub Actions
 
-A manual workflow is provided. It expects the repository secret:
+The repository secret remains:
 
 `AAVE_RPC_URL`
 
-The workflow uploads the resulting T0 JSON as an artifact. Review the generated cohort and provenance before committing any dataset into the repository.
+The current workflow reuses the fixed candidate T0 block from `config/forward50_runtime.json` unless an explicit block is supplied by manual dispatch.
 
 ## Data-quality gate
 
@@ -106,7 +71,8 @@ A run is not accepted merely because it produced 50 rows.
 Before freezing the dataset:
 
 - every address must pass the contract eligibility thresholds;
-- every record must have a block hash and Tier A evidence;
-- the snapshot block must be identical across all 50 records;
+- every record must have the same block hash;
+- every record must have direct receipt verification of its Aave Borrow history;
+- every record must have block-pinned T0 account-state evidence;
 - candidate selection must reproduce at the same fixed block;
 - no outcome information may be used during selection.
