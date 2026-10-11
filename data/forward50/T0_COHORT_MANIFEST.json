@@ -1,0 +1,44 @@
+{
+  "status": "COHORT_T0_FROZEN",
+  "experiment": "FORWARD_50",
+  "snapshot_block": 26167261,
+  "snapshot_block_hash": "0xbed220d742b21a51da74801865c30bb05bd8eda7c1a4a5715cc85cb1037716a1",
+  "snapshot_at": "2026-10-11T05:57:11+00:00",
+  "record_count": 50,
+  "source_dataset_sha256": "aa02bbee8382908068bfb36e4ec7b853da9adac089516668c2fca7a9ef9a8313",
+  "successful_run_ids": [
+    38116601840,
+    38117058572
+  ],
+  "source_commits": [
+    "3b3e30f3883906168e5c9f5597844510b78106d0",
+    "af8fb2de4ae40ddc78e825825268206a9d9634f6"
+  ],
+  "reproducibility": {
+    "runs": 2,
+    "byte_identical": true,
+    "json_equal": true,
+    "same_wallets": true,
+    "same_snapshot_block": true,
+    "same_snapshot_hash": true
+  },
+  "validation": {
+    "unique_wallets": 50,
+    "eligibility_violations": 0,
+    "min_active_debt_usd": 1104.4,
+    "min_collateral_usd": 2889.4,
+    "min_health_factor": 1.02164926,
+    "max_health_factor": 26.1855639,
+    "min_protocol_history_days": 116,
+    "max_protocol_history_days": 363,
+    "total_active_debt_usd": 49918306.09,
+    "total_collateral_usd": 98020933.17,
+    "evidence_per_record": 3,
+    "required_evidence_tiers": [
+      "A_DIRECT_ONCHAIN",
+      "B_PROTOCOL_DERIVED"
+    ]
+  },
+  "full_forward50_status": "PENDING_DECISION_FREEZE",
+  "note": "Cohort T0 is frozen and reproducible. Full Forward 50 T0 freeze requires a deterministic model decision artifact to be generated and hashed before future outcome observation."
+}
