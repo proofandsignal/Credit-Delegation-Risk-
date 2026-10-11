@@ -1,0 +1,40 @@
+{
+  "status": "DECISIONS_T0_FROZEN",
+  "experiment": "FORWARD_50",
+  "model_version": "forward-position-risk-v0.2.0",
+  "model_semantics": "proxy_probability_of_registered_onchain_adverse_credit_risk_event_not_borrower_default",
+  "snapshot_block": 26167261,
+  "snapshot_block_hash": "0xbed220d742b21a51da74801865c30bb05bd8eda7c1a4a5715cc85cb1037716a1",
+  "snapshot_at": "2026-10-11T05:57:11+00:00",
+  "source_dataset_sha256": "aa02bbee8382908068bfb36e4ec7b853da9adac089516668c2fca7a9ef9a8313",
+  "decision_artifact_sha256": "e7d604f28a85721ec8443056830a09a7e406a101241a2d89fc95b0ea340c66c9",
+  "record_count": 50,
+  "paper_decisions": {
+    "APPROVE_PAPER": 45,
+    "REVIEW_PAPER": 3,
+    "REJECT_PAPER": 2
+  },
+  "risk_score": {
+    "minimum": 17,
+    "maximum": 100,
+    "average": 88.68
+  },
+  "model_risk_probability": {
+    "minimum": 0.01,
+    "maximum": 0.2442,
+    "calibrated": false
+  },
+  "registration_provenance": {
+    "t0_cohort_data_seen": true,
+    "future_outcome_data_seen": false,
+    "pre_cohort_preregistered": false,
+    "model_commit": "2f24f63522d991a91bce5b6f7b4a5eb49f5a8c50",
+    "freeze_pipeline_commit": "51c63931fcafe5d3ff9bf11b2a20e71888d1c909"
+  },
+  "evaluation_schedule_utc": {
+    "T_plus_30": "2026-11-10T05:57:11+00:00",
+    "T_plus_60": "2026-12-10T05:57:11+00:00",
+    "T_plus_90": "2027-01-09T05:57:11+00:00"
+  },
+  "integrity_rule": "The original model version, source T0 hash, decision artifact hash and 50 T0 predictions are immutable for the primary Forward 50 evaluation. Later model versions may be evaluated separately but cannot replace this baseline."
+}

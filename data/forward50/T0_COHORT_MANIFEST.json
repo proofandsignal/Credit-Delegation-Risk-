@@ -6,7 +6,7 @@
   "snapshot_at": "2026-10-11T05:57:11+00:00",
   "record_count": 50,
   "source_dataset_sha256": "aa02bbee8382908068bfb36e4ec7b853da9adac089516668c2fca7a9ef9a8313",
-  "successful_run_ids": [
+  "successful_reproducibility_run_ids": [
     38116601840,
     38117058572
   ],
@@ -39,6 +39,13 @@
       "B_PROTOCOL_DERIVED"
     ]
   },
-  "full_forward50_status": "PENDING_DECISION_FREEZE",
-  "note": "Cohort T0 is frozen and reproducible. Full Forward 50 T0 freeze requires a deterministic model decision artifact to be generated and hashed before future outcome observation."
+  "full_forward50_status": "T0_FROZEN",
+  "decision_manifest": "data/forward50/T0_DECISION_MANIFEST.json",
+  "decision_artifact_sha256": "e7d604f28a85721ec8443056830a09a7e406a101241a2d89fc95b0ea340c66c9",
+  "evaluation_schedule_utc": {
+    "T_plus_30": "2026-11-10T05:57:11+00:00",
+    "T_plus_60": "2026-12-10T05:57:11+00:00",
+    "T_plus_90": "2027-01-09T05:57:11+00:00"
+  },
+  "note": "The cohort and baseline decision commitment are frozen before future outcome observation. Future model revisions cannot replace the original Forward 50 baseline."
 }
