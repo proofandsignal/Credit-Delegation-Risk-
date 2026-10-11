@@ -1,0 +1,157 @@
+name: Forward 50 Checkpoint
+
+on:
+  schedule:
+    - cron: "0 7 10 11 *"
+    - cron: "0 7 10 12 *"
+    - cron: "0 7 9 1 *"
+  workflow_dispatch:
+    inputs:
+      horizon:
+        description: "Checkpoint horizon: 30, 60 or 90"
+        required: true
+        type: choice
+        options:
+          - "30"
+          - "60"
+          - "90"
+
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+
+      - name: Test
+        run: pytest -q
+
+      - name: Select checkpoint horizon
+        id: horizon
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.horizon }}" ]; then
+            H="${{ inputs.horizon }}"
+          else
+            TODAY="$(date -u +%Y-%m-%d)"
+            case "$TODAY" in
+              2026-11-10) H="30" ;;
+              2026-12-10) H="60" ;;
+              2027-01-09) H="90" ;;
+              *)
+                echo "Scheduled run is outside registered Forward 50 checkpoint dates: $TODAY"
+                exit 1
+                ;;
+            esac
+          fi
+          echo "value=$H" >> "$GITHUB_OUTPUT"
+
+      - name: Download retained daily observation artifacts
+        shell: bash
+        run: |
+          rm -rf runtime
+          mkdir -p runtime/observations runtime/checkpoints
+
+          gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100"             --jq '.artifacts[] | select(.expired == false and (.name | startswith("forward50-observation-"))) | .id'             > runtime/observation_ids.txt
+
+          if [ ! -s runtime/observation_ids.txt ]; then
+            echo "No retained Forward 50 observation artifacts found"
+            exit 1
+          fi
+
+          while read -r ID; do
+            mkdir -p "runtime/observations/$ID"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ID/zip" > "runtime/observations/$ID.zip"
+            unzip -q "runtime/observations/$ID.zip" -d "runtime/observations/$ID"
+          done < runtime/observation_ids.txt
+
+          DECISIONS="$(find runtime/observations -name t0_decisions.json | head -1)"
+          test -n "$DECISIONS"
+          cp "$DECISIONS" runtime/t0_decisions.json
+
+      - name: Download prior checkpoint when required
+        id: prior
+        shell: bash
+        run: |
+          H="${{ steps.horizon.outputs.value }}"
+          PRIOR=""
+          if [ "$H" = "60" ]; then PRIOR_H="30"; fi
+          if [ "$H" = "90" ]; then PRIOR_H="60"; fi
+
+          if [ -n "${PRIOR_H:-}" ]; then
+            ID="$(gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100"               --jq ".artifacts[] | select(.expired == false and .name == \"forward50-checkpoint-$PRIOR_H\") | .id"               | head -1)"
+            if [ -z "$ID" ]; then
+              echo "Missing retained prior checkpoint artifact: $PRIOR_H"
+              exit 1
+            fi
+            mkdir -p runtime/prior
+            gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ID/zip" > runtime/prior.zip
+            unzip -q runtime/prior.zip -d runtime/prior
+            PRIOR="$(find runtime/prior -name checkpoint.json | head -1)"
+            test -n "$PRIOR"
+          fi
+
+          echo "path=$PRIOR" >> "$GITHUB_OUTPUT"
+
+      - name: Aggregate checkpoint
+        shell: bash
+        run: |
+          H="${{ steps.horizon.outputs.value }}"
+          PRIOR="${{ steps.prior.outputs.path }}"
+
+          if [ -n "$PRIOR" ]; then
+            credit-risk forward50-checkpoint               --decisions runtime/t0_decisions.json               --observations-dir runtime/observations               --horizon "$H"               --prior-checkpoint "$PRIOR"               --out runtime/checkpoint.json
+          else
+            credit-risk forward50-checkpoint               --decisions runtime/t0_decisions.json               --observations-dir runtime/observations               --horizon "$H"               --out runtime/checkpoint.json
+          fi
+
+      - name: Require complete checkpoint
+        run: |
+          python - <<'PY'
+          import json
+          data = json.load(open("runtime/checkpoint.json"))
+          assert data["status"] == "COMPLETE", data["coverage"]
+          assert data["record_count"] == 50
+          print("Status:", data["status"])
+          print("Coverage:", data["coverage"]["coverage_ratio"])
+          print("Event rate:", data["overall_performance"]["event_rate"])
+          print("Brier score:", data["overall_performance"]["brier_score"])
+          print("Calibration gap:", data["overall_performance"]["calibration_gap"])
+          print("False negatives:", data["false_negative_count"])
+          PY
+
+      - name: Write summary
+        run: |
+          H="${{ steps.horizon.outputs.value }}"
+          echo "## FORWARD 50 — T+$H" >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          d = json.load(open("runtime/checkpoint.json"))
+          print("")
+          print(f"- Status: {d['status']}")
+          print(f"- Coverage: {d['coverage']['coverage_ratio']:.1%}")
+          print(f"- Primary event rate: {d['overall_performance']['event_rate']:.2%}")
+          print(f"- Brier score: {d['overall_performance']['brier_score']}")
+          print(f"- Calibration gap: {d['overall_performance']['calibration_gap']}")
+          print(f"- False negatives: {d['false_negative_count']}")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forward50-checkpoint-${{ steps.horizon.outputs.value }}
+          path: |
+            runtime/checkpoint.json
+            runtime/t0_decisions.json
+          retention-days: 90
+          if-no-files-found: error
